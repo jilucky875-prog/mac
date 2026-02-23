@@ -1,61 +1,109 @@
-- name: 🔐 Setup VNC Server & noVNC
+name: macOS Web RDP
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: "mac-rdp"
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 360
+
+    steps:
+      - name: 🔔 Notify Start
         run: |
-          echo "Injecting Secure VNC Password..."
+          curl -X POST -H "Content-Type: application/json" \
+          -d '{"message": "🍎 *Mac Starting...*\nWait: 4 mins"}' \
+          ${{ secrets.N8N_WEBHOOK }} || true
+
+      - name: ⚙️ System Setup
+        run: |
+          sudo mdutil -i off -a
+          sudo pmset -a displaysleep 0 disksleep 0 sleep 0
+          
+          # RAM Monitor Script
+          cat << 'EOF' > ram_monitor.sh
+          #!/bin/bash
+          while true; do
+            FREE_PAGES=$(vm_stat | grep "Pages free" | awk '{print $3}' | sed 's/\.//')
+            if [ "$FREE_PAGES" -lt 200000 ]; then sudo purge; fi
+            sleep 30
+          done
+          EOF
+          chmod +x ram_monitor.sh
+          ./ram_monitor.sh &
+
+      - name: 🔐 VNC Password & Server Setup
+        run: |
+          echo "1. Injecting Apple VNC Hash..."
           sudo python3 -c '
-          import os
           key = bytes.fromhex("1734516E8BA8C5E2FF1C39567390ADCA")
           pwd = b"123456".ljust(8, b"\x00")[:8]
           obf = bytes(a ^ b for a, b in zip(pwd, key))
-          
           with open("/Library/Preferences/com.apple.VNCSettings.txt", "wb") as f:
-              f.write(obf)
-          user_path = "/Users/runner/Library/Preferences/com.apple.VNCSettings.txt"
-          with open(user_path, "wb") as f:
               f.write(obf)
           '
           
-          echo "Configuring VNC Server Permissions..."
+          echo "2. Forcing VNC Server to Start..."
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -configure -allowAccessFor -allUsers -privs -all
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -configure -clientopts -setvnclegacy -vnclegacy yes
-          
-          echo "Activating & Restarting VNC Service..."
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -restart -agent
           
-          echo "Setting up Web UI (noVNC)..."
+          echo "3. Waiting for Port 5900 to open..."
+          sleep 6
+          
+          echo "4. Starting Web UI (noVNC)..."
           git clone https://github.com/novnc/noVNC.git
           git clone https://github.com/novnc/websockify noVNC/utils/websockify
           ./noVNC/utils/novnc_proxy --vnc localhost:5900 --listen 8080 &
 
-      - name: 🌐 Start Cloudflare Tunnel (Smart Wait)
+      - name: 💾 GDrive Workspace Sync
+        env:
+          RCLONE_CONFIG_DATA: ${{ secrets.RCLONE_CONFIG }}
+        run: |
+          brew install rclone
+          mkdir -p ~/.config/rclone
+          echo "$RCLONE_CONFIG_DATA" > ~/.config/rclone/rclone.conf
+          mkdir -p ~/Desktop/MyWorkspace
+          rclone mkdir gdrive:RDP_Backup || true
+          rclone copy gdrive:RDP_Backup ~/Desktop/MyWorkspace
+
+      - name: 🌐 Cloudflare Tunnel Setup
         run: |
           brew install cloudflared
           cloudflared tunnel --url http://localhost:8080 > cloudflare.log 2>&1 &
           
-          echo "Waiting for Cloudflare to generate URL..."
-          # Smart Loop: Har 2 second me check karega, maximum 20 baar (40 seconds total)
+          echo "Waiting for URL generation..."
           for i in {1..20}; do
             sleep 2
             URL=$(grep -o 'https://[a-zA-Z0-9.-]*\.trycloudflare.com' cloudflare.log | head -n 1)
-            if [ ! -z "$URL" ]; then
-              break
-            fi
+            if [ ! -z "$URL" ]; then break; fi
           done
           
-          # Agar 40 seconds baad bhi link nahi aaya, toh error show karega
-          if [ -z "$URL" ]; then
-            echo "⚠️ ERROR: Cloudflare failed to generate tunnel. Showing logs:"
-            cat cloudflare.log
-            exit 1
-          fi
-          
           FINAL_URL="$URL/vnc.html"
-          
-          echo "===================================================================="
-          echo "🌐 LIVE URL: $FINAL_URL"
-          echo "⚠️ USERNAME: (Leave Blank)"
-          echo "🔑 PASSWORD: 123456"
-          echo "===================================================================="
+          echo "🌐 URL: $FINAL_URL"
           
           curl -X POST -H "Content-Type: application/json" \
-          -d "{\"message\": \"🍎 *Mac Workspace Ready!*\n🔗 $FINAL_URL\n🔑 Pass: \`123456\`\"}" \
+          -d "{\"message\": \"🍎 *Mac Ready!*\n🔗 $FINAL_URL\n🔑 Pass: \`123456\`\"}" \
           ${{ secrets.N8N_WEBHOOK }} || true
+
+      - name: 🔄 Auto-Sync Background Loop
+        run: |
+          cleanup() {
+              echo "Saving data..."
+              rclone sync ~/Desktop/MyWorkspace gdrive:RDP_Backup
+              exit 0
+          }
+          trap 'cleanup' SIGINT SIGTERM EXIT
+          START=$(date +%s)
+          while true; do
+              NOW=$(date +%s); DIFF=$((NOW - START))
+              if [ $DIFF -ge 21000 ]; then exit 0; fi
+              if [ $((DIFF % 300)) -lt 60 ] && [ $DIFF -gt 100 ]; then
+                  rclone sync ~/Desktop/MyWorkspace gdrive:RDP_Backup
+              fi
+              sleep 60
+          done
