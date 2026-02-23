@@ -1,4 +1,4 @@
-name: Ultimate macOS RDP (Production Final)
+name: Ultimate macOS RDP (Final v2)
 
 on:
   workflow_dispatch:
@@ -23,7 +23,7 @@ jobs:
         run: |
           # Dark Mode
           osascript -e 'tell application "System Events" to tell appearance preferences to set dark mode to true'
-          # Fix Timezone (Using symlink to bypass systemsetup bug)
+          # Fix Timezone
           sudo ln -sf /usr/share/zoneinfo/Asia/Kolkata /etc/localtime
           
           echo "Disabling heavy macOS features..."
@@ -48,22 +48,27 @@ jobs:
           echo "Installing Google Chrome..."
           brew install --cask google-chrome || true
 
-      - name: 🔐 Setup Web-VNC & Fix Apple Auth Bug
+      - name: 🔐 Setup Web-VNC (Python Legacy Fix)
         run: |
-          echo "Fixing macOS VNC Authentication Bug..."
-          sudo dscl . -passwd /Users/runner 14789147
+          echo "Setting up VNC with Legacy Password..."
           
-          # Hacker-level Python fix for VNC Password (Bypasses Apple's strict MDM rules)
+          # CRITICAL FIX: Hum system user password change nahi kar rahe (kyunki wo error deta hai).
+          # Hum direct VNC Legacy password file create kar rahe hain.
+          
           sudo python3 -c '
           import sys
+          # Apple VNC Obfuscation Key
           key = bytes.fromhex("1734516E8BA8C5E2FF1C39567390ADCA")
+          # Password: "14789147" (Padded to 8 bytes)
           pwd = b"14789147".ljust(8, b"\x00")[:8]
           obf = bytes(a ^ b for a, b in zip(pwd, key))
+          # Write directly to system settings
           with open("/Library/Preferences/com.apple.VNCSettings.txt", "wb") as f:
               f.write(obf)
           '
           
           echo "Restarting VNC Server..."
+          # Configure VNC to use the password file we just made
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -access -on -clientopts -setvnclegacy -vnclegacy yes -restart -agent -privs -all
           
           echo "Setting up noVNC..."
@@ -96,12 +101,12 @@ jobs:
           
           echo "===================================================================="
           echo "🌐 LOKENDRA-MACOS IS LIVE: $FINAL_URL"
-          echo "👤 Username: (Blank / Khali chhod dein)"
+          echo "IMPORTANT: Username box ko BLANK chhodna hai!"
           echo "🔑 PIN: 14789147"
           echo "===================================================================="
 
           curl -X POST -H "Content-Type: application/json" \
-          -d "{\"message\": \"🍎 *LOKENDRA-MACOS Ready!*\n🔗 Web UI: $FINAL_URL\n👤 User: (Blank)\n🔑 PIN: \`14789147\`\n📁 GDrive: Auto-Sync Active\"}" \
+          -d "{\"message\": \"🍎 *LOKENDRA-MACOS Ready!*\n🔗 Web UI: $FINAL_URL\n⚠️ User Box: *KEEP BLANK*\n🔑 PIN: \`14789147\`\"}" \
           ${{ secrets.N8N_WEBHOOK }} || true
 
       - name: 🔄 Keep-Alive & Safe Sync Loop
