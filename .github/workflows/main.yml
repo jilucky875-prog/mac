@@ -1,4 +1,4 @@
-name: macOS Native VNC (Golden Master - Fixed Final)
+name: macOS Native VNC (Final Compatibility Fix)
 
 on: workflow_dispatch
 
@@ -15,7 +15,7 @@ jobs:
       - name: 🔔 Notify Start
         run: |
           curl -sS -X POST -H "Content-Type: application/json" \
-            -d "{\"message\":\"🍎 *Mac Starting...*\nMode: Final Working RDP\"}" \
+            -d "{\"message\":\"🍎 *Mac Starting...*\nMode: Compatibility Fix\"}" \
             "${{ secrets.N8N_WEBHOOK }}" || true
 
       - name: ⚙️ System Prep & Wake Screen
@@ -35,7 +35,7 @@ jobs:
           chmod +x ram_monitor.sh
           ./ram_monitor.sh &
 
-      - name: 🔐 Setup VNC (Dual Daemon Rebuild + Secure Pass)
+      - name: 🔐 Setup VNC (Compatibility Mode)
         env:
           VNC_PASS: ${{ secrets.VNC_PASSWORD }}
         run: |
@@ -44,23 +44,24 @@ jobs:
             exit 1
           fi
 
-          echo "1) Stop and kill stuck processes..."
+          echo "1) Cleaning up service state..."
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -stop || true
           sudo pkill screensharingd || true
-          sudo pkill ARDAgent || true
 
-          echo "2) Resetting Daemons (Screen Sharing + Remote Management)..."
-          sudo launchctl bootout system /System/Library/LaunchDaemons/com.apple.screensharing.plist || true
-          sudo launchctl bootout system /System/Library/LaunchDaemons/com.apple.RemoteManagement.launchd || true
-          sleep 3
-          sudo launchctl bootstrap system /System/Library/LaunchDaemons/com.apple.screensharing.plist || true
-          sudo launchctl bootstrap system /System/Library/LaunchDaemons/com.apple.RemoteManagement.launchd || true
-
-          echo "3) Final Configuration (Single Line Safe Execution)..."
+          echo "2) Configuring VNC (All Users, Legacy Password)..."
+          # Using the single line command that worked in your logs
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -allowAccessFor -allUsers -configure -access -on -privs -all -configure -clientopts -setreqperm -reqperm no -setvnclegacy -vnclegacy yes -setvncpw -vncpw "$VNC_PASS" -restart -agent
 
-          echo "4) Final Verification..."
+          echo "3) Force Loading Screen Sharing (Traditional Method)..."
+          # Since bootstrap failed, we use the older load command which is more stable on runners
+          sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist || true
+
+          echo "4) Initializing GUI Session (Fixing Black Screen)..."
+          # Triggering a system alert wakes up the window server permissions
+          osascript -e 'display notification "VNC Session Starting" with title "System Update"' || true
           osascript -e 'tell application "System Events" to key code 123' || true
+
+          echo "5) Final Verification..."
           sleep 5
           sudo lsof -nP -iTCP:5900 -sTCP:LISTEN || netstat -an | grep 5900 || echo "WARN: 5900 not listening"
 
@@ -79,7 +80,6 @@ jobs:
         run: |
           echo "Starting Pinggy Tunnel..."
           TUNNEL_DEST="tcp@a.pinggy.io"
-          # Canonical Pinggy syntax: -R0:localhost:5900
           ssh -p 443 -R0:localhost:5900 -o StrictHostKeyChecking=no -o ServerAliveInterval=30 "$TUNNEL_DEST" > pinggy.log 2>&1 &
           
           sleep 12
@@ -92,7 +92,7 @@ jobs:
           CLEAN_URL="${URL#tcp://}"
           
           curl -sS -X POST -H "Content-Type: application/json" \
-            -d "{\"message\":\"🍎 *Mac Ready!*\n🖥️ VNC Address: \`$CLEAN_URL\`\n👤 User: (Leave Blank)\n🔑 Pass: (Use GitHub Secret)\"}" \
+            -d "{\"message\":\"🍎 *Mac Ready!*\n🖥️ VNC Address: \`$CLEAN_URL\`\n👤 User: (Leave Blank)\n🔑 Pass: (Use Secret)\"}" \
             "${{ secrets.N8N_WEBHOOK }}" || true
 
       - name: 🔄 Keep-Alive & Auto-Backup
