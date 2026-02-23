@@ -1,17 +1,16 @@
-name: Ultimate macOS RDP (Chrome + GDrive + Safe Cancel)
+name: Ultimate macOS RDP (Production Final)
 
 on:
   workflow_dispatch:
 
-# 🚫 CONSTRAINT: Parallel run allow nahi karna hai (Safe Drive Sync)
 concurrency:
   group: "macos-rdp"
   cancel-in-progress: false
 
 jobs:
   macos-ultimate:
-    runs-on: macos-14 # Apple Silicon M1
-    timeout-minutes: 360 # Max 6 hours
+    runs-on: macos-14
+    timeout-minutes: 360
 
     steps:
       - name: 🔔 Notify Start (N8N Webhook)
@@ -20,18 +19,19 @@ jobs:
           -d '{"message": "🍎 *LOKENDRA-MACOS Starting...*\nWait: 3-4 mins for Setup"}' \
           ${{ secrets.N8N_WEBHOOK }} || true
 
-      - name: ⚙️ Extreme Optimization & Dark Mode
+      - name: ⚙️ System Optimization & UI Settings
         run: |
+          # Dark Mode
           osascript -e 'tell application "System Events" to tell appearance preferences to set dark mode to true'
-          sudo systemsetup -settimezone "Asia/Kolkata" || true
-
+          # Fix Timezone (Using symlink to bypass systemsetup bug)
+          sudo ln -sf /usr/share/zoneinfo/Asia/Kolkata /etc/localtime
+          
           echo "Disabling heavy macOS features..."
           sudo mdutil -i off -a
           sudo pmset -a displaysleep 0 disksleep 0 sleep 0
           defaults write com.apple.universalaccess reduceTransparency -bool true
           sudo killall softwareupdated || true
           
-          # RAM Shield
           cat << 'EOF' > ram_monitor.sh
           #!/bin/bash
           while true; do
@@ -46,16 +46,32 @@ jobs:
       - name: 🛠️ Install Google Chrome
         run: |
           echo "Installing Google Chrome..."
-          brew install --cask google-chrome
+          brew install --cask google-chrome || true
 
-      - name: 3. Setup Web-VNC (Website Access)
+      - name: 🔐 Setup Web-VNC & Fix Apple Auth Bug
         run: |
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -access -on -clientopts -setvnclegacy -vnclegacy yes -clientopts -setvncpw -vncpw 14789147 -restart -agent -privs -all
+          echo "Fixing macOS VNC Authentication Bug..."
+          sudo dscl . -passwd /Users/runner 14789147
+          
+          # Hacker-level Python fix for VNC Password (Bypasses Apple's strict MDM rules)
+          sudo python3 -c '
+          import sys
+          key = bytes.fromhex("1734516E8BA8C5E2FF1C39567390ADCA")
+          pwd = b"14789147".ljust(8, b"\x00")[:8]
+          obf = bytes(a ^ b for a, b in zip(pwd, key))
+          with open("/Library/Preferences/com.apple.VNCSettings.txt", "wb") as f:
+              f.write(obf)
+          '
+          
+          echo "Restarting VNC Server..."
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -access -on -clientopts -setvnclegacy -vnclegacy yes -restart -agent -privs -all
+          
+          echo "Setting up noVNC..."
           git clone https://github.com/novnc/noVNC.git
           git clone https://github.com/novnc/websockify noVNC/utils/websockify
           ./noVNC/utils/novnc_proxy --vnc localhost:5900 --listen 8080 &
 
-      - name: 4. Setup Workspace (Smart GDrive Download)
+      - name: 💾 Setup Workspace (Smart GDrive Sync)
         env:
           RCLONE_CONFIG_DATA: ${{ secrets.RCLONE_CONFIG }}
         run: |
@@ -68,25 +84,26 @@ jobs:
           echo "📥 DOWNLOADING PREVIOUS WORK..."
           rclone copy gdrive:RDP_Backup ~/Desktop/MyWorkspace
 
-      - name: 5. Generate Cloudflare URL
+      - name: 🌐 Generate Cloudflare URL
         run: |
           brew install cloudflared
           cloudflared tunnel --url http://localhost:8080 > cloudflare.log 2>&1 &
           sleep 12
           URL=$(grep -o 'https://[a-zA-Z0-9.-]*\.trycloudflare.com' cloudflare.log | head -n 1)
           
+          # Direct vnc.html URL link generator
+          FINAL_URL="$URL/vnc.html"
+          
           echo "===================================================================="
-          echo "🌐 LOKENDRA-MACOS IS LIVE: $URL"
+          echo "🌐 LOKENDRA-MACOS IS LIVE: $FINAL_URL"
+          echo "👤 Username: (Blank / Khali chhod dein)"
           echo "🔑 PIN: 14789147"
           echo "===================================================================="
 
           curl -X POST -H "Content-Type: application/json" \
-          -d "{\"message\": \"🍎 *LOKENDRA-MACOS Ready!*\n🔗 Web UI: $URL\n🔑 PIN: \`14789147\`\n📁 GDrive: Auto-Sync Active\"}" \
+          -d "{\"message\": \"🍎 *LOKENDRA-MACOS Ready!*\n🔗 Web UI: $FINAL_URL\n👤 User: (Blank)\n🔑 PIN: \`14789147\`\n📁 GDrive: Auto-Sync Active\"}" \
           ${{ secrets.N8N_WEBHOOK }} || true
 
-      # ==================================================================
-      # 6. OBSERVER LOOP (✅ SAFE MANUAL CANCEL + AUTO BACKUP)
-      # ==================================================================
       - name: 🔄 Keep-Alive & Safe Sync Loop
         run: |
           cleanup() {
@@ -118,9 +135,6 @@ jobs:
               sleep 60
           done
 
-      # ==================================================================
-      # 7. CRITICAL FAILURE ALERT
-      # ==================================================================
       - name: 🚨 Notify Failure
         if: failure()
         run: |
