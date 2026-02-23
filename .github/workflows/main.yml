@@ -1,9 +1,13 @@
-name: macOS Native VNC
+name: macOS Web GUI (Cloudflare VNC)
 
 on: workflow_dispatch
 
+concurrency:
+  group: "mac-web-vnc"
+  cancel-in-progress: false
+
 jobs:
-  macos-vnc:
+  macos-web-vnc:
     runs-on: macos-14
     timeout-minutes: 360
 
@@ -11,26 +15,53 @@ jobs:
       - name: 🔔 Notify Start
         run: |
           curl -X POST -H "Content-Type: application/json" \
-          -d '{"message": "🍎 *Mac Starting...*\nMode: Native VNC"}' \
+          -d '{"message": "🍎 *Mac Starting...*\nWait: 4 mins for Setup"}' \
           ${{ secrets.N8N_WEBHOOK }} || true
 
-      - name: 👤 Create Admin User (Authentication Fix)
+      - name: ⚙️ System Prep & RAM Monitor
         run: |
-          # System password change karne ki jagah hum apna naya user banayenge
-          echo "Creating secure user 'remoteuser'..."
-          sudo sysadminctl -addUser remoteuser -fullName "Remote Admin" -password "123456" -admin
-
-      - name: ⚙️ Configure VNC for New User
-        run: |
-          echo "Enabling Screen Sharing for 'remoteuser'..."
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -configure -allowAccessFor -specifiedUsers
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -configure -access -on -privs -all -users remoteuser
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -restart -agent
+          sudo mdutil -i off -a
+          sudo pmset -a displaysleep 0 disksleep 0 sleep 0
+          defaults write com.apple.universalaccess reduceTransparency -bool true
+          sudo killall softwareupdated || true
           
-          # Force load the daemon
-          sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist || true
+          # Auto-Purge RAM
+          cat << 'EOF' > ram_monitor.sh
+          #!/bin/bash
+          while true; do
+            FREE_PAGES=$(vm_stat | grep "Pages free" | awk '{print $3}' | sed 's/\.//')
+            if [ "$FREE_PAGES" -lt 200000 ]; then sudo purge; fi
+            sleep 30
+          done
+          EOF
+          chmod +x ram_monitor.sh
+          ./ram_monitor.sh &
 
-      - name: 💾 Setup GDrive
+      - name: 🔐 VNC Password Bypass & Setup
+        run: |
+          echo "Bypassing macOS VNC Auth..."
+          # Apple Legacy VNC Hash for "123456"
+          sudo python3 -c '
+          key = bytes.fromhex("1734516E8BA8C5E2FF1C39567390ADCA")
+          pwd = b"123456".ljust(8, b"\x00")[:8]
+          obf = bytes(a ^ b for a, b in zip(pwd, key))
+          with open("/Library/Preferences/com.apple.VNCSettings.txt", "wb") as f: f.write(obf)
+          '
+          
+          echo "Starting VNC Server..."
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -access -on -clientopts -setvnclegacy -vnclegacy yes -allowAccessFor -allUsers -privs -all -restart -agent
+          
+          # Critical: Wait for VNC to fully bind to port 5900
+          sleep 10
+          
+          echo "Setting up Web UI (noVNC)..."
+          git clone https://github.com/novnc/noVNC.git
+          git clone https://github.com/novnc/websockify noVNC/utils/websockify
+          
+          # Start WebSockify explicitly to translate VNC (TCP) to WebSockets (HTTP)
+          ./noVNC/utils/novnc_proxy --vnc localhost:5900 --listen 8080 &
+
+      - name: 💾 Setup GDrive Sync
         env:
           RCLONE_CONFIG_DATA: ${{ secrets.RCLONE_CONFIG }}
         run: |
@@ -41,38 +72,34 @@ jobs:
           rclone mkdir gdrive:RDP_Backup || true
           rclone copy gdrive:RDP_Backup ~/Desktop/MyWorkspace
 
-      - name: 🔌 Start Ngrok Tunnel (TCP)
-        env:
-          NGROK_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
+      - name: 🌐 Start Cloudflare Web Tunnel
         run: |
-          brew install ngrok/ngrok/ngrok
-          ngrok config add-authtoken $NGROK_TOKEN
-          # VNC Port 5900 ko TCP tunnel kar rahe hain
-          ngrok tcp 5900 --log=stdout > ngrok.log &
+          brew install cloudflared
+          cloudflared tunnel --url http://localhost:8080 > cloudflare.log 2>&1 &
           
-          echo "Waiting for Tunnel..."
-          sleep 10
-          
-          # Extract URL
-          URL=$(grep -o "tcp://[0-9a-z.-]*:[0-9]*" ngrok.log)
+          echo "Waiting for Cloudflare URL..."
+          for i in {1..20}; do
+            sleep 2
+            URL=$(grep -o 'https://[a-zA-Z0-9.-]*\.trycloudflare.com' cloudflare.log | head -n 1)
+            if [ ! -z "$URL" ]; then break; fi
+          done
           
           if [ -z "$URL" ]; then
-            echo "⚠️ Error: Ngrok URL not found. Check token."
-            cat ngrok.log
+            echo "⚠️ ERROR: Cloudflare URL not found."
+            cat cloudflare.log
             exit 1
           fi
           
-          # Remove 'tcp://' prefix for clean address
-          CLEAN_URL=$(echo $URL | sed 's/tcp:\/\///')
+          FINAL_URL="$URL/vnc.html"
           
           echo "==================================================="
-          echo "✅ VNC ADDRESS: $CLEAN_URL"
-          echo "👤 USERNAME: remoteuser"
+          echo "🌐 WEB VNC URL: $FINAL_URL"
+          echo "👤 USERNAME: (Leave Blank)"
           echo "🔑 PASSWORD: 123456"
           echo "==================================================="
           
           curl -X POST -H "Content-Type: application/json" \
-          -d "{\"message\": \"🍎 *Mac Ready!*\n🖥️ VNC Address: \`$CLEAN_URL\`\n👤 User: \`remoteuser\`\n🔑 Pass: \`123456\`\"}" \
+          -d "{\"message\": \"🍎 *Mac Ready!*\n🔗 $FINAL_URL\n🔑 Pass: \`123456\`\"}" \
           ${{ secrets.N8N_WEBHOOK }} || true
 
       - name: 🔄 Keep-Alive Loop
