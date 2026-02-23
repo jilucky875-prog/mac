@@ -23,7 +23,7 @@ jobs:
           sudo mdutil -i off -a || true
           sudo pmset -a displaysleep 0 disksleep 0 sleep 0 || true
           caffeinate -u -t 10 &
-          
+
           cat << 'EOF' > ram_monitor.sh
           #!/bin/bash
           while true; do
@@ -56,8 +56,7 @@ jobs:
           sudo launchctl bootstrap system /System/Library/LaunchDaemons/com.apple.screensharing.plist || true
           sudo launchctl bootstrap system /System/Library/LaunchDaemons/com.apple.RemoteManagement.launchd || true
 
-          echo "3) Configure VNC via kickstart (Single Line Fix)"
-          # Combined into one line to eliminate backslash syntax errors completely
+          echo "3) Configure VNC via kickstart (single line)"
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -allowAccessFor -allUsers -configure -access -on -privs -all -configure -clientopts -setreqperm -reqperm no -setvnclegacy -vnclegacy yes -setvncpw -vncpw "$VNC_PASS" -restart -agent
 
           echo "4) Wake display + verify port"
@@ -80,9 +79,8 @@ jobs:
         run: |
           echo "Starting Pinggy Tunnel..."
           TUNNEL_DEST="tcp@a.pinggy.io"
-          # Canonical Pinggy -R0: syntax
           ssh -p 443 -R0:localhost:5900 -o StrictHostKeyChecking=no -o ServerAliveInterval=30 "$TUNNEL_DEST" > pinggy.log 2>&1 &
-          
+
           sleep 12
           URL=$(grep -o "tcp://[0-9a-zA-Z.-]*:[0-9]*" pinggy.log | head -n 1)
           if [ -z "$URL" ]; then
@@ -90,8 +88,9 @@ jobs:
             cat pinggy.log
             exit 1
           fi
+
           CLEAN_URL="${URL#tcp://}"
-          
+
           curl -sS -X POST -H "Content-Type: application/json" \
             -d "{\"message\":\"🍎 *Mac Ready!*\n🖥️ VNC Address: \`$CLEAN_URL\`\n👤 User: (Leave Blank)\n🔑 Pass: (Use GitHub Secret)\"}" \
             "${{ secrets.N8N_WEBHOOK }}" || true
@@ -103,6 +102,7 @@ jobs:
             exit 0
           }
           trap 'cleanup' SIGINT SIGTERM EXIT
+
           START=$(date +%s)
           while true; do
             NOW=$(date +%s); DIFF=$((NOW - START))
