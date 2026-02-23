@@ -1,119 +1,25 @@
-name: Ultimate macOS RDP (Nuclear Fix)
-
-on:
-  workflow_dispatch:
-
-concurrency:
-  group: "macos-rdp"
-  cancel-in-progress: false
-
-jobs:
-  macos-nuclear:
-    runs-on: macos-14
-    timeout-minutes: 360
-
-    steps:
-      - name: 🔔 Notify Start
+- name: 🔐 Inject Password & Force Start VNC
         run: |
-          curl -X POST -H "Content-Type: application/json" \
-          -d '{"message": "🍎 *Mac Nuclear Setup Starting...*\nWait: 4 mins"}' \
-          ${{ secrets.N8N_WEBHOOK }} || true
-
-      - name: ⚙️ System Prep
-        run: |
-          # Dark Mode & Timezone
-          osascript -e 'tell application "System Events" to tell appearance preferences to set dark mode to true'
-          sudo ln -sf /usr/share/zoneinfo/Asia/Kolkata /etc/localtime
-          
-          # Disable Spotlight & Sleep
-          sudo mdutil -i off -a
-          sudo pmset -a displaysleep 0 disksleep 0 sleep 0
-          defaults write com.apple.universalaccess reduceTransparency -bool true
-          sudo killall softwareupdated || true
-
-      - name: 🛠️ Install Chrome
-        run: brew install --cask google-chrome || true
-
-      - name: 🔐 Inject VNC Password (Dual-Layer)
-        run: |
-          echo "Injecting Legacy Password '123456' into System & User Configs..."
-          
-          # Python Script to generate Apple VNC Hash
+          echo "Step 1: Injecting Password '123456'..."
           sudo python3 -c '
           import os
-          # Key for Apple VNC
           key = bytes.fromhex("1734516E8BA8C5E2FF1C39567390ADCA")
-          # Password: "123456" (padded to 8 bytes)
           pwd = b"123456".ljust(8, b"\x00")[:8]
           obf = bytes(a ^ b for a, b in zip(pwd, key))
-          
-          # Path 1: System Preferences
           with open("/Library/Preferences/com.apple.VNCSettings.txt", "wb") as f:
               f.write(obf)
-          
-          # Path 2: User Preferences (Runner)
           user_path = "/Users/runner/Library/Preferences/com.apple.VNCSettings.txt"
           with open(user_path, "wb") as f:
               f.write(obf)
           '
           
-          echo "Force-Enabling VNC Legacy Mode..."
-          # Activate Remote Management with Legacy Flags
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -configure -allowAccessFor -allUsers -privs -all
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -configure -clientopts -setvnclegacy -vnclegacy yes 
+          echo "Step 2: Activating VNC Server (Fixed missing -activate)..."
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -access -on -clientopts -setvnclegacy -vnclegacy yes -allowAccessFor -allUsers -privs -all -restart -agent
           
-          # Hard Restart of Agent
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -restart -agent
+          echo "Step 3: Forcing macOS Screen Sharing Daemon..."
+          sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist || true
           
           echo "Setting up noVNC..."
           git clone https://github.com/novnc/noVNC.git
           git clone https://github.com/novnc/websockify noVNC/utils/websockify
           ./noVNC/utils/novnc_proxy --vnc localhost:5900 --listen 8080 &
-
-      - name: 💾 Workspace Sync
-        env:
-          RCLONE_CONFIG_DATA: ${{ secrets.RCLONE_CONFIG }}
-        run: |
-          brew install rclone
-          mkdir -p ~/.config/rclone
-          echo "$RCLONE_CONFIG_DATA" > ~/.config/rclone/rclone.conf
-          mkdir -p ~/Desktop/MyWorkspace
-          rclone mkdir gdrive:RDP_Backup || true
-          rclone copy gdrive:RDP_Backup ~/Desktop/MyWorkspace
-
-      - name: 🌐 Cloudflare Tunnel
-        run: |
-          brew install cloudflared
-          cloudflared tunnel --url http://localhost:8080 > cloudflare.log 2>&1 &
-          sleep 12
-          URL=$(grep -o 'https://[a-zA-Z0-9.-]*\.trycloudflare.com' cloudflare.log | head -n 1)
-          FINAL_URL="$URL/vnc.html"
-          
-          echo "===================================================================="
-          echo "🌐 LIVE URL: $FINAL_URL"
-          echo "⚠️ USERNAME: (Leave Blank)"
-          echo "🔑 PASSWORD: 123456"
-          echo "===================================================================="
-          
-          curl -X POST -H "Content-Type: application/json" \
-          -d "{\"message\": \"🍎 *Mac Ready!*\n🔗 $FINAL_URL\n🔑 Pass: \`123456\`\"}" \
-          ${{ secrets.N8N_WEBHOOK }} || true
-
-      - name: 🔄 Safe Loop
-        run: |
-          cleanup() {
-              echo "Saving data..."
-              rclone sync ~/Desktop/MyWorkspace gdrive:RDP_Backup
-              exit 0
-          }
-          trap 'cleanup' SIGINT SIGTERM EXIT
-          
-          START=$(date +%s)
-          while true; do
-              NOW=$(date +%s); DIFF=$((NOW - START))
-              if [ $DIFF -ge 21000 ]; then exit 0; fi
-              if [ $((DIFF % 300)) -lt 60 ] && [ $DIFF -gt 100 ]; then
-                  rclone sync ~/Desktop/MyWorkspace gdrive:RDP_Backup
-              fi
-              sleep 60
-          done
