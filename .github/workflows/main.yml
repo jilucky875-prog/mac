@@ -1,4 +1,4 @@
-name: macOS Native VNC (Clean Kickstart)
+name: macOS Native VNC (Perplexity Final)
 
 on: workflow_dispatch
 
@@ -15,7 +15,7 @@ jobs:
       - name: 🔔 Notify Start
         run: |
           curl -X POST -H "Content-Type: application/json" \
-          -d '{"message": "🍎 *Mac Starting...*\nMode: Native VNC (Clean Kickstart)"}' \
+          -d '{"message": "🍎 *Mac Starting...*\nMode: Native VNC (Single Line Fix)"}' \
           ${{ secrets.N8N_WEBHOOK }} || true
 
       - name: ⚙️ System Prep & Wake Screen
@@ -39,17 +39,14 @@ jobs:
           chmod +x ram_monitor.sh
           ./ram_monitor.sh &
 
-      - name: 🔐 Setup VNC (Native Kickstart Method)
+      - name: 🔐 Setup VNC (Single-Line All-Users Fix)
         run: |
           echo "1. Stopping ARD Agent..."
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -stop || true
-          
-          echo "2. Configuring and Starting Native VNC with Password..."
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate \
-            -configure -allowAccessFor -specifiedUsers \
-            -configure -access -on -privs -all -users runner \
-            -configure -clientopts -setvnclegacy -vnclegacy yes -setvncpw -vncpw "123456" \
-            -restart -agent
+
+          echo "2. Configuring and Starting Native VNC (All Users, Legacy Password)..."
+          # Single line to completely avoid YAML/Bash line continuation bugs
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -allowAccessFor -allUsers -configure -access -on -privs -all -configure -clientopts -setvnclegacy -vnclegacy yes -setvncpw -vncpw "123456" -restart -agent
 
           echo "3. Forcing Screen Sharing Service to Load..."
           sudo launchctl enable system/com.apple.screensharing || true
@@ -57,10 +54,10 @@ jobs:
 
           echo "4. Waking Mac Display..."
           osascript -e 'tell application "System Events" to key code 123' || true
-          
-          echo "5. Checking Port 5900..."
+
+          echo "5. Verifying Port 5900 is Listening..."
           sleep 5
-          netstat -an | grep 5900 || echo "Wait for connection..."
+          sudo lsof -nP -iTCP:5900 -sTCP:LISTEN || netstat -an | grep 5900 || echo "⚠️ Port 5900 check failed!"
 
       - name: 💾 Setup GDrive Sync
         env:
@@ -96,6 +93,7 @@ jobs:
           echo "🔑 PASSWORD: 123456"
           echo "==================================================="
 
+          # Note: Password is kept here for ease of throwaway access. For production, move to secrets.
           curl -X POST -H "Content-Type: application/json" \
           -d "{\"message\": \"🍎 *Mac Ready!*\n🖥️ VNC Address: \`$CLEAN_URL\`\n👤 User: (Leave Blank)\n🔑 Pass: \`123456\`\"}" \
           ${{ secrets.N8N_WEBHOOK }} || true
