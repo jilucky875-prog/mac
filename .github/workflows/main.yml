@@ -1,4 +1,4 @@
-name: macOS Native VNC (Secure Endgame)
+name: macOS Native VNC (Perfected)
 
 on: workflow_dispatch
 
@@ -15,7 +15,7 @@ jobs:
       - name: 🔔 Notify Start
         run: |
           curl -X POST -H "Content-Type: application/json" \
-          -d '{"message": "🍎 *Mac Starting...*\nMode: Native VNC (Secure Endgame)"}' \
+          -d '{"message": "🍎 *Mac Starting...*\nMode: Native VNC (Perplexity Perfected)"}' \
           ${{ secrets.N8N_WEBHOOK }} || true
 
       - name: ⚙️ System Prep & Wake Screen
@@ -35,45 +35,39 @@ jobs:
           chmod +x ram_monitor.sh
           ./ram_monitor.sh &
 
-      - name: 🔐 Setup VNC (Secure Hex Injection & Reset)
+      - name: 🔐 Setup VNC (Native Kickstart + Dual Daemon Reset)
         env:
           VNC_PASS: ${{ secrets.VNC_PASSWORD }}
         run: |
-          echo "1. Generating strict Apple Legacy VNC Hex from Secret..."
-          # Fetching secret safely via environment variable to avoid bash interpolation bugs
-          sudo VNC_PASS="$VNC_PASS" python3 - <<'EOF'
-          import os
-          key = bytes.fromhex("1734516E8BA8C5E2FF1C39567390ADCA")
-          # Retrieve password securely, default to a fallback if secret is empty
-          raw_pwd = os.environ.get("VNC_PASS", "123456")
-          pwd = raw_pwd.encode('utf-8')[:8].ljust(8, b"\x00")
-          p = pwd + (b"\x00" * 8)
-          obf = bytes([key[i] ^ p[i] for i in range(16)])
-          hexstr = obf.hex().upper()
-          with open("/Library/Preferences/com.apple.VNCSettings.txt", "w") as f:
-              f.write(hexstr + "\n")
-          EOF
-          
-          echo "2. Applying Strict Permissions to Password File..."
-          sudo chown root:wheel /Library/Preferences/com.apple.VNCSettings.txt
-          sudo chmod 600 /Library/Preferences/com.apple.VNCSettings.txt
+          # 1. Fail fast if secret is missing
+          if [ -z "$VNC_PASS" ]; then 
+            echo "⚠️ ERROR: VNC_PASSWORD secret is missing! Please add it in GitHub Settings."
+            exit 1
+          fi
 
-          echo "3. Configuring ARD Agent (Bypassing Buggy Password Flags)..."
+          echo "2. Stopping ARD Agent..."
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -stop || true
-          # Note: Intentionally excluding -setvncpw so macOS reads our perfect Python hash
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -allowAccessFor -allUsers -configure -access -on -privs -all -configure -clientopts -setreqperm -reqperm no -setvnclegacy -vnclegacy yes -restart -agent
 
-          echo "4. Hard Resetting Screen Sharing Daemon..."
+          echo "3. Configuring Native VNC (All Users, Legacy Password)..."
+          # Single line command: -reqperm no is CRITICAL for headless runners to bypass physical popups
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -allowAccessFor -allUsers -configure -access -on -privs -all -configure -clientopts -setreqperm -reqperm no -setvnclegacy -vnclegacy yes -setvncpw -vncpw "$VNC_PASS" -restart -agent
+
+          echo "4. Hard Resetting Both ARD Daemons (Perplexity Fix)..."
+          # Bootout (Force Stop)
           sudo launchctl bootout system /System/Library/LaunchDaemons/com.apple.screensharing.plist || true
-          sleep 2
+          sudo launchctl bootout system /System/Library/LaunchDaemons/com.apple.RemoteManagement.launchd || true
+          sleep 3
+          
+          # Bootstrap (Fresh Load)
           sudo launchctl bootstrap system /System/Library/LaunchDaemons/com.apple.screensharing.plist || true
+          sudo launchctl bootstrap system /System/Library/LaunchDaemons/com.apple.RemoteManagement.launchd || true
 
           echo "5. Waking Mac Display..."
           osascript -e 'tell application "System Events" to key code 123' || true
 
           echo "6. Verifying Service Port..."
           sleep 5
-          sudo lsof -nP -iTCP:5900 -sTCP:LISTEN || netstat -an | grep 5900 || echo "⚠️ Port 5900 check failed!"
+          sudo lsof -nP -iTCP:5900 -sTCP:LISTEN || netstat -an | grep 5900 || echo "⚠️ Port 5900 check failed, but continuing..."
 
       - name: 💾 Setup GDrive Sync
         env:
@@ -94,6 +88,13 @@ jobs:
 
           sleep 12
           URL=$(grep -o "tcp://[0-9a-zA-Z.-]*:[0-9]*" pinggy.log | head -n 1)
+          
+          if [ -z "$URL" ]; then
+            echo "⚠️ Error: Pinggy Tunnel failed."
+            cat pinggy.log
+            exit 1
+          fi
+          
           CLEAN_URL=$(echo $URL | sed 's/tcp:\/\///')
 
           curl -X POST -H "Content-Type: application/json" \
