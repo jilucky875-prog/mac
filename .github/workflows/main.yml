@@ -1,4 +1,4 @@
-name: macOS Native VNC (Anti-Crash Fix)
+name: macOS Native VNC (Golden Master - Truly Final)
 
 on: workflow_dispatch
 
@@ -11,7 +11,7 @@ jobs:
       - name: 🔔 Notify Start
         run: |
           curl -sS -X POST -H "Content-Type: application/json" \
-            -d "{\"message\":\"🍎 *Mac Starting...*\nMode: Anti-Crash Resolution Fix\"}" \
+            -d "{\"message\":\"🍎 *Mac Starting...*\nMode: Final Verified RDP\"}" \
             "${{ secrets.N8N_WEBHOOK }}" || true
 
       - name: ⚙️ System Prep
@@ -20,35 +20,33 @@ jobs:
           sudo pmset -a displaysleep 0 disksleep 0 sleep 0 || true
           caffeinate -u -t 10 &
 
-      - name: 🔐 Setup VNC (Resolution & Session Fix)
+      - name: 🔐 Setup VNC (Master Compatibility Mode)
         env:
           VNC_PASS: ${{ secrets.VNC_PASSWORD }}
         run: |
           if [ -z "$VNC_PASS" ]; then echo "ERROR: VNC_PASSWORD missing"; exit 1; fi
 
-          echo "1) Cleaning stuck sessions..."
+          echo "1) Killing stuck background processes..."
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -stop || true
           sudo pkill screensharingd || true
+          sudo pkill ARDAgent || true
 
-          echo "2) Configuring VNC with reqperm=no..."
-          # Force resolution and bypass permission prompts
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate \
-            -configure -allowAccessFor -allUsers \
-            -configure -access -on -privs -all \
-            -configure -clientopts -setreqperm -reqperm no -setvnclegacy -vnclegacy yes -setvncpw -vncpw "$VNC_PASS" \
-            -restart -agent
+          echo "2) Configuring Native VNC (Single Line Clean Execution)..."
+          # -reqperm no is mandatory for headless runners
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -allowAccessFor -allUsers -configure -access -on -privs -all -configure -clientopts -setreqperm -reqperm no -setvnclegacy -vnclegacy yes -setvncpw -vncpw "$VNC_PASS" -restart -agent
 
-          echo "3) Forcing Window Server to render pixels..."
-          # Setting a standard resolution helps the VNC buffer
-          sudo /usr/bin/defaults write /Library/Preferences/com.apple.windowserver.plist DisplayResolutionEnabled -bool true
-          
-          echo "4) Waking the Console User session..."
-          # Nudging the runner user specifically
-          sudo launchctl enable system/com.apple.screensharing || true
+          echo "3) Forcing Daemon Load (Legacy Path)..."
+          # launchctl load is more resilient to I/O errors on hosted runners
           sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist || true
           
-          # Virtual Key Press to trigger render
+          echo "4) Nudging Window Server (Anti-Crash)..."
+          # Triggering a display notification forces the frame buffer to initialize
+          osascript -e 'display notification "Initializing RDP Session" with title "Nexus Automation"' || true
           osascript -e 'tell application "System Events" to key code 123' || true
+
+          echo "5) Verification..."
+          sleep 5
+          sudo lsof -nP -iTCP:5900 -sTCP:LISTEN || netstat -an | grep 5900 || echo "WARN: 5900 not listening yet"
 
       - name: 💾 Setup GDrive Sync
         env:
@@ -62,15 +60,17 @@ jobs:
 
       - name: 🔌 Start Pinggy TCP Tunnel
         run: |
+          echo "Starting Pinggy Tunnel..."
           TUNNEL_DEST="tcp@a.pinggy.io"
           ssh -p 443 -R0:localhost:5900 -o StrictHostKeyChecking=no -o ServerAliveInterval=30 "$TUNNEL_DEST" > pinggy.log 2>&1 &
           
           sleep 12
           URL=$(grep -o "tcp://[0-9a-zA-Z.-]*:[0-9]*" pinggy.log | head -n 1)
+          if [ -z "$URL" ]; then echo "ERROR: Pinggy Tunnel failed"; exit 1; fi
           CLEAN_URL="${URL#tcp://}"
           
           curl -sS -X POST -H "Content-Type: application/json" \
-            -d "{\"message\":\"🍎 *Mac Ready!*\n🖥️ VNC Address: \`$CLEAN_URL\`\n🔑 Pass: (Use Secret)\"}" \
+            -d "{\"message\":\"🍎 *Mac Ready!*\n🖥️ VNC Address: \`$CLEAN_URL\`\n👤 User: (Leave Blank)\n🔑 Pass: (Use Secret)\"}" \
             "${{ secrets.N8N_WEBHOOK }}" || true
 
       - name: 🔄 Keep-Alive & Auto-Backup
