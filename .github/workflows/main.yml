@@ -1,11 +1,60 @@
-- name: 🔐 Inject Password & Force Start VNC
+name: macOS Cloud Workspace (Persistent)
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: "macos-workspace"
+  cancel-in-progress: false
+
+jobs:
+  macos-workspace:
+    runs-on: macos-14
+    timeout-minutes: 360
+
+    steps:
+      - name: 🔔 Notify Start
         run: |
-          echo "Step 1: Injecting Password '123456'..."
+          curl -X POST -H "Content-Type: application/json" \
+          -d '{"message": "🍎 *macOS Workspace Starting...*\nWait: 4 mins for Setup"}' \
+          ${{ secrets.N8N_WEBHOOK }} || true
+
+      - name: ⚙️ System Prep & RAM Monitor
+        run: |
+          # Dark Mode & Timezone Setup
+          osascript -e 'tell application "System Events" to tell appearance preferences to set dark mode to true'
+          sudo ln -sf /usr/share/zoneinfo/Asia/Kolkata /etc/localtime
+          
+          # Disable heavy background services
+          sudo mdutil -i off -a
+          sudo pmset -a displaysleep 0 disksleep 0 sleep 0
+          defaults write com.apple.universalaccess reduceTransparency -bool true
+          sudo killall softwareupdated || true
+          
+          # Auto-Purge RAM Script
+          cat << 'EOF' > ram_monitor.sh
+          #!/bin/bash
+          while true; do
+            FREE_PAGES=$(vm_stat | grep "Pages free" | awk '{print $3}' | sed 's/\.//')
+            if [ "$FREE_PAGES" -lt 200000 ]; then sudo purge; fi
+            sleep 30
+          done
+          EOF
+          chmod +x ram_monitor.sh
+          ./ram_monitor.sh &
+
+      - name: 🛠️ Install Core Apps
+        run: brew install --cask google-chrome || true
+
+      - name: 🔐 Setup VNC Server & noVNC
+        run: |
+          echo "Injecting Secure VNC Password..."
           sudo python3 -c '
           import os
           key = bytes.fromhex("1734516E8BA8C5E2FF1C39567390ADCA")
           pwd = b"123456".ljust(8, b"\x00")[:8]
           obf = bytes(a ^ b for a, b in zip(pwd, key))
+          
           with open("/Library/Preferences/com.apple.VNCSettings.txt", "wb") as f:
               f.write(obf)
           user_path = "/Users/runner/Library/Preferences/com.apple.VNCSettings.txt"
@@ -13,13 +62,61 @@
               f.write(obf)
           '
           
-          echo "Step 2: Activating VNC Server (Fixed missing -activate)..."
+          echo "Activating macOS Screen Sharing Service..."
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -access -on -clientopts -setvnclegacy -vnclegacy yes -allowAccessFor -allUsers -privs -all -restart -agent
-          
-          echo "Step 3: Forcing macOS Screen Sharing Daemon..."
           sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist || true
           
-          echo "Setting up noVNC..."
+          echo "Setting up Web UI (noVNC)..."
           git clone https://github.com/novnc/noVNC.git
           git clone https://github.com/novnc/websockify noVNC/utils/websockify
           ./noVNC/utils/novnc_proxy --vnc localhost:5900 --listen 8080 &
+
+      - name: 💾 Setup GDrive Workspace
+        env:
+          RCLONE_CONFIG_DATA: ${{ secrets.RCLONE_CONFIG }}
+        run: |
+          brew install rclone
+          mkdir -p ~/.config/rclone
+          echo "$RCLONE_CONFIG_DATA" > ~/.config/rclone/rclone.conf
+          
+          mkdir -p ~/Desktop/MyWorkspace
+          rclone mkdir gdrive:RDP_Backup || true
+          echo "Syncing previous data..."
+          rclone copy gdrive:RDP_Backup ~/Desktop/MyWorkspace
+
+      - name: 🌐 Start Cloudflare Tunnel
+        run: |
+          brew install cloudflared
+          cloudflared tunnel --url http://localhost:8080 > cloudflare.log 2>&1 &
+          sleep 12
+          URL=$(grep -o 'https://[a-zA-Z0-9.-]*\.trycloudflare.com' cloudflare.log | head -n 1)
+          FINAL_URL="$URL/vnc.html"
+          
+          echo "===================================================================="
+          echo "🌐 LIVE URL: $FINAL_URL"
+          echo "⚠️ USERNAME: (Leave Blank)"
+          echo "🔑 PASSWORD: 123456"
+          echo "===================================================================="
+          
+          curl -X POST -H "Content-Type: application/json" \
+          -d "{\"message\": \"🍎 *Mac Workspace Ready!*\n🔗 $FINAL_URL\n🔑 Pass: \`123456\`\"}" \
+          ${{ secrets.N8N_WEBHOOK }} || true
+
+      - name: 🔄 Keep-Alive & Auto-Sync
+        run: |
+          cleanup() {
+              echo "Saving data to GDrive before exit..."
+              rclone sync ~/Desktop/MyWorkspace gdrive:RDP_Backup
+              exit 0
+          }
+          trap 'cleanup' SIGINT SIGTERM EXIT
+          
+          START=$(date +%s)
+          while true; do
+              NOW=$(date +%s); DIFF=$((NOW - START))
+              if [ $DIFF -ge 21000 ]; then exit 0; fi
+              if [ $((DIFF % 300)) -lt 60 ] && [ $DIFF -gt 100 ]; then
+                  rclone sync ~/Desktop/MyWorkspace gdrive:RDP_Backup
+              fi
+              sleep 60
+          done
