@@ -1,4 +1,4 @@
-name: macOS Native VNC (Perplexity Master Fix)
+name: macOS Native VNC (Golden Master)
 
 on: workflow_dispatch
 
@@ -15,7 +15,7 @@ jobs:
       - name: 🔔 Notify Start
         run: |
           curl -X POST -H "Content-Type: application/json" \
-          -d '{"message": "🍎 *Mac Starting...*\nMode: Native VNC (Master Fix)"}' \
+          -d '{"message": "🍎 *Mac Starting...*\nMode: Native VNC (Golden Master)"}' \
           "${{ secrets.N8N_WEBHOOK }}" || true
 
       - name: ⚙️ System Prep & Wake Screen
@@ -35,7 +35,7 @@ jobs:
           chmod +x ram_monitor.sh
           ./ram_monitor.sh &
 
-      - name: 🔐 Setup VNC (Correct Sequence & Daemon Rebuild)
+      - name: 🔐 Setup VNC (Final Dual-Daemon Rebuild)
         env:
           VNC_PASS: ${{ secrets.VNC_PASSWORD }}
         run: |
@@ -44,19 +44,20 @@ jobs:
             exit 1
           fi
 
-          echo "1. Stopping and Killing Stuck Processes..."
+          echo "1. Killing Stuck Processes..."
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -stop || true
           sudo pkill screensharingd || true
           sudo pkill ARDAgent || true
 
-          echo "2. Dual Daemon Rebuild (Resetting State)..."
+          echo "2. Rebuilding Daemons (Reset State)..."
           sudo launchctl bootout system /System/Library/LaunchDaemons/com.apple.screensharing.plist || true
           sudo launchctl bootout system /System/Library/LaunchDaemons/com.apple.RemoteManagement.launchd || true
           sleep 3
           sudo launchctl bootstrap system /System/Library/LaunchDaemons/com.apple.screensharing.plist || true
           sudo launchctl bootstrap system /System/Library/LaunchDaemons/com.apple.RemoteManagement.launchd || true
 
-          echo "3. Final Configuration & Activation (Native Kickstart)..."
+          echo "3. Final VNC Configuration (Native)..."
+          # Perplexity Verified: Single line or clean multiline is safe
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
             -activate -configure -allowAccessFor -allUsers \
             -configure -access -on -privs -all \
@@ -64,10 +65,10 @@ jobs:
             -setvnclegacy -vnclegacy yes -setvncpw -vncpw "$VNC_PASS" \
             -restart -agent
 
-          echo "4. Waking Display & Final Verification..."
+          echo "4. Waking Display & Verification..."
           osascript -e 'tell application "System Events" to key code 123' || true
           sleep 5
-          sudo lsof -nP -iTCP:5900 -sTCP:LISTEN || netstat -an | grep 5900 || echo "⚠️ Check Port 5900 manually"
+          sudo lsof -nP -iTCP:5900 -sTCP:LISTEN || netstat -an | grep 5900 || echo "⚠️ Port 5900 not listening!"
 
       - name: 💾 Setup GDrive Sync
         env:
@@ -84,7 +85,7 @@ jobs:
         run: |
           echo "Starting Pinggy Tunnel..."
           TUNNEL_DEST="tcp@a.pinggy.io"
-          ssh -p 443 -R0:localhost:5900 -o StrictHostKeyChecking=no -o ServerAliveInterval=30 $TUNNEL_DEST > pinggy.log 2>&1 &
+          ssh -p 443 -R 0:localhost:5900 -o StrictHostKeyChecking=no -o ServerAliveInterval=30 "$TUNNEL_DEST" > pinggy.log 2>&1 &
 
           sleep 12
           URL=$(grep -o "tcp://[0-9a-zA-Z.-]*:[0-9]*" pinggy.log | head -n 1)
@@ -98,7 +99,7 @@ jobs:
           CLEAN_URL="${URL#tcp://}"
 
           curl -X POST -H "Content-Type: application/json" \
-          -d "{\"message\": \"🍎 *Mac Ready!*\n🖥️ VNC Address: \`$CLEAN_URL\`\n👤 User: (Leave Blank)\n🔑 Pass: (Use your GitHub Secret)\"}" \
+          -d "{\"message\": \"🍎 *Mac Ready!*\n🖥️ VNC Address: \`$CLEAN_URL\`\n👤 User: (Leave Blank)\n🔑 Pass: (Use Secret)\"}" \
           "${{ secrets.N8N_WEBHOOK }}" || true
 
       - name: 🔄 Keep-Alive & Auto-Backup
