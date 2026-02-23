@@ -1,0 +1,129 @@
+name: Ultimate macOS RDP (Chrome + GDrive + Safe Cancel)
+
+on:
+  workflow_dispatch:
+
+# 🚫 CONSTRAINT: Parallel run allow nahi karna hai (Safe Drive Sync)
+concurrency:
+  group: "macos-rdp"
+  cancel-in-progress: false
+
+jobs:
+  macos-ultimate:
+    runs-on: macos-14 # Apple Silicon M1
+    timeout-minutes: 360 # Max 6 hours
+
+    steps:
+      - name: 🔔 Notify Start (N8N Webhook)
+        run: |
+          curl -X POST -H "Content-Type: application/json" \
+          -d '{"message": "🍎 *LOKENDRA-MACOS Starting...*\nWait: 3-4 mins for Setup"}' \
+          ${{ secrets.N8N_WEBHOOK }} || true
+
+      - name: ⚙️ Extreme Optimization & Dark Mode
+        run: |
+          osascript -e 'tell application "System Events" to tell appearance preferences to set dark mode to true'
+          sudo systemsetup -settimezone "Asia/Kolkata" || true
+
+          echo "Disabling heavy macOS features..."
+          sudo mdutil -i off -a
+          sudo pmset -a displaysleep 0 disksleep 0 sleep 0
+          defaults write com.apple.universalaccess reduceTransparency -bool true
+          sudo killall softwareupdated || true
+          
+          # RAM Shield
+          cat << 'EOF' > ram_monitor.sh
+          #!/bin/bash
+          while true; do
+            FREE_PAGES=$(vm_stat | grep "Pages free" | awk '{print $3}' | sed 's/\.//')
+            if [ "$FREE_PAGES" -lt 200000 ]; then sudo purge; fi
+            sleep 30
+          done
+          EOF
+          chmod +x ram_monitor.sh
+          ./ram_monitor.sh &
+
+      - name: 🛠️ Install Google Chrome
+        run: |
+          echo "Installing Google Chrome..."
+          brew install --cask google-chrome
+
+      - name: 3. Setup Web-VNC (Website Access)
+        run: |
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -access -on -clientopts -setvnclegacy -vnclegacy yes -clientopts -setvncpw -vncpw 14789147 -restart -agent -privs -all
+          git clone https://github.com/novnc/noVNC.git
+          git clone https://github.com/novnc/websockify noVNC/utils/websockify
+          ./noVNC/utils/novnc_proxy --vnc localhost:5900 --listen 8080 &
+
+      - name: 4. Setup Workspace (Smart GDrive Download)
+        env:
+          RCLONE_CONFIG_DATA: ${{ secrets.RCLONE_CONFIG }}
+        run: |
+          brew install rclone
+          mkdir -p ~/.config/rclone
+          echo "$RCLONE_CONFIG_DATA" > ~/.config/rclone/rclone.conf
+          
+          mkdir -p ~/Desktop/MyWorkspace
+          rclone mkdir gdrive:RDP_Backup || true
+          echo "📥 DOWNLOADING PREVIOUS WORK..."
+          rclone copy gdrive:RDP_Backup ~/Desktop/MyWorkspace
+
+      - name: 5. Generate Cloudflare URL
+        run: |
+          brew install cloudflared
+          cloudflared tunnel --url http://localhost:8080 > cloudflare.log 2>&1 &
+          sleep 12
+          URL=$(grep -o 'https://[a-zA-Z0-9.-]*\.trycloudflare.com' cloudflare.log | head -n 1)
+          
+          echo "===================================================================="
+          echo "🌐 LOKENDRA-MACOS IS LIVE: $URL"
+          echo "🔑 PIN: 14789147"
+          echo "===================================================================="
+
+          curl -X POST -H "Content-Type: application/json" \
+          -d "{\"message\": \"🍎 *LOKENDRA-MACOS Ready!*\n🔗 Web UI: $URL\n🔑 PIN: \`14789147\`\n📁 GDrive: Auto-Sync Active\"}" \
+          ${{ secrets.N8N_WEBHOOK }} || true
+
+      # ==================================================================
+      # 6. OBSERVER LOOP (✅ SAFE MANUAL CANCEL + AUTO BACKUP)
+      # ==================================================================
+      - name: 🔄 Keep-Alive & Safe Sync Loop
+        run: |
+          cleanup() {
+              echo "🛑 STOP SIGNAL RECEIVED (Manual Cancel or Timeout)"
+              echo "💾 Initiating Emergency Final Sync to GDrive..."
+              rclone sync ~/Desktop/MyWorkspace gdrive:RDP_Backup
+              echo "✅ Backup Done. Exiting safely."
+              exit 0
+          }
+          
+          trap 'cleanup' SIGINT SIGTERM EXIT
+          
+          START=$(date +%s)
+          echo "🔄 Loop Started. Monitoring..."
+          
+          while true; do
+              NOW=$(date +%s); DIFF=$((NOW - START))
+              
+              if [ $DIFF -ge 21000 ]; then
+                  echo "⏰ Time limit reached. Handing over to Trap..."
+                  exit 0
+              fi
+              
+              if [ $((DIFF % 300)) -lt 60 ] && [ $DIFF -gt 100 ]; then
+                  echo "⏰ Periodic 5-min Auto-Sync to GDrive..."
+                  rclone sync ~/Desktop/MyWorkspace gdrive:RDP_Backup
+              fi
+              
+              sleep 60
+          done
+
+      # ==================================================================
+      # 7. CRITICAL FAILURE ALERT
+      # ==================================================================
+      - name: 🚨 Notify Failure
+        if: failure()
+        run: |
+          curl -X POST -H "Content-Type: application/json" \
+          -d "{\"message\": \"⚠️ *CRITICAL FAILURE*\nLOKENDRA-MACOS RDP crashed or encountered an error.\"}" \
+          ${{ secrets.N8N_WEBHOOK }} || true
