@@ -1,88 +1,70 @@
-name: macOS Native VNC (Golden Master - Truly Final)
+name: macOS VNC Desktop (Serveo Tunnel)
 
 on: workflow_dispatch
 
 jobs:
-  macos-vnc-pro:
-    runs-on: macos-14
-    timeout-minutes: 360
-
+  macos-vnc:
+    runs-on: macos-latest  # macos-26 bhi use kar sakte ho (latest)
+    
     steps:
-      - name: 🔔 Notify Start
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Create VNC User & Enable VNC
         run: |
-          curl -sS -X POST -H "Content-Type: application/json" \
-            -d "{\"message\":\"🍎 *Mac Starting...*\nMode: Final Verified RDP\"}" \
-            "${{ secrets.N8N_WEBHOOK }}" || true
-
-      - name: ⚙️ System Prep
-        run: |
-          sudo mdutil -i off -a || true
-          sudo pmset -a displaysleep 0 disksleep 0 sleep 0 || true
-          caffeinate -u -t 10 &
-
-      - name: 🔐 Setup VNC (Master Compatibility Mode)
-        env:
-          VNC_PASS: ${{ secrets.VNC_PASSWORD }}
-        run: |
-          if [ -z "$VNC_PASS" ]; then echo "ERROR: VNC_PASSWORD missing"; exit 1; fi
-
-          echo "1) Killing stuck background processes..."
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -stop || true
-          sudo pkill screensharingd || true
-          sudo pkill ARDAgent || true
-
-          echo "2) Configuring Native VNC (Single Line Clean Execution)..."
-          # -reqperm no is mandatory for headless runners
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -allowAccessFor -allUsers -configure -access -on -privs -all -configure -clientopts -setreqperm -reqperm no -setvnclegacy -vnclegacy yes -setvncpw -vncpw "$VNC_PASS" -restart -agent
-
-          echo "3) Forcing Daemon Load (Legacy Path)..."
-          # launchctl load is more resilient to I/O errors on hosted runners
+          # VNC user banao
+          sudo dscl . -create /Users/vncuser
+          sudo dscl . -create /Users/vncuser UserShell /bin/bash
+          sudo dscl . -create /Users/vncuser RealName "VNC User"
+          sudo dscl . -create /Users/vncuser UniqueID 501
+          sudo dscl . -create /Users/vncuser PrimaryGroupID 20
+          sudo dscl . -create /Users/vncuser NFSHomeDirectory /Users/vncuser
+          sudo dscl . -passwd /Users/vncuser "${{ secrets.VNC_USER_PASSWORD }}"
+          sudo createhomedir -c -u vncuser
+          
+          # VNC enable karo
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
+            -activate -configure -access -on \
+            -clientopts -setvnclegacy -vnclegacy yes \
+            -clientopts -setvncpw -vncpw "${{ secrets.VNC_PASSWORD }}" \
+            -restart -agent -privs -all
+          
+          # Screen sharing enable
           sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist || true
-          
-          echo "4) Nudging Window Server (Anti-Crash)..."
-          # Triggering a display notification forces the frame buffer to initialize
-          osascript -e 'display notification "Initializing RDP Session" with title "Nexus Automation"' || true
-          osascript -e 'tell application "System Events" to key code 123' || true
 
-          echo "5) Verification..."
-          sleep 5
-          sudo lsof -nP -iTCP:5900 -sTCP:LISTEN || netstat -an | grep 5900 || echo "WARN: 5900 not listening yet"
-
-      - name: 💾 Setup GDrive Sync
-        env:
-          RCLONE_CONFIG_DATA: ${{ secrets.RCLONE_CONFIG }}
+      - name: Setup Serveo SSH Tunnel (VNC Port 5900)
         run: |
-          brew install rclone
-          mkdir -p ~/.config/rclone
-          echo "$RCLONE_CONFIG_DATA" > ~/.config/rclone/rclone.conf
-          mkdir -p ~/Desktop/MyWorkspace
-          rclone copy gdrive:RDP_Backup ~/Desktop/MyWorkspace || true
-
-      - name: 🔌 Start Pinggy TCP Tunnel
-        run: |
-          echo "Starting Pinggy Tunnel..."
-          TUNNEL_DEST="tcp@a.pinggy.io"
-          ssh -p 443 -R0:localhost:5900 -o StrictHostKeyChecking=no -o ServerAliveInterval=30 "$TUNNEL_DEST" > pinggy.log 2>&1 &
+          # SSH key generate (serveo ke liye)
+          ssh-keygen -t rsa -f ~/.ssh/serveo_key -N ""
           
-          sleep 12
-          URL=$(grep -o "tcp://[0-9a-zA-Z.-]*:[0-9]*" pinggy.log | head -n 1)
-          if [ -z "$URL" ]; then echo "ERROR: Pinggy Tunnel failed"; exit 1; fi
-          CLEAN_URL="${URL#tcp://}"
+          # Serveo tunnel start (background me)
+          ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=60 \
+            -i ~/.ssh/serveo_key \
+            -R ${{ secrets.SERVEO_SUBDOMAIN }}:5900:localhost:5900 \
+            serveo.net > serveo.log 2>&1 &
           
-          curl -sS -X POST -H "Content-Type: application/json" \
-            -d "{\"message\":\"🍎 *Mac Ready!*\n🖥️ VNC Address: \`$CLEAN_URL\`\n👤 User: (Leave Blank)\n🔑 Pass: (Use Secret)\"}" \
-            "${{ secrets.N8N_WEBHOOK }}" || true
+          sleep 10
+          
+          # Tunnel URL print karo
+          echo "======================================"
+          echo "VNC ACCESS URL:"
+          cat serveo.log | grep -o 'Forwarding.*' || echo "Check full log below"
+          cat serveo.log
+          echo "======================================"
+          echo ""
+          echo "Connect using:"
+          echo "vnc://${{ secrets.SERVEO_SUBDOMAIN }}.serveo.net:5900"
+          echo "Username: vncuser"
+          echo "Password: (set in VNC_USER_PASSWORD secret)"
+          echo "======================================"
 
-      - name: 🔄 Keep-Alive & Auto-Backup
+      - name: Keep Alive (6 hours max)
         run: |
-          cleanup() { rclone sync ~/Desktop/MyWorkspace gdrive:RDP_Backup || true; exit 0; }
-          trap 'cleanup' SIGINT SIGTERM EXIT
-          START=$(date +%s)
-          while true; do
-            NOW=$(date +%s); DIFF=$((NOW - START))
-            if [ $DIFF -ge 21000 ]; then exit 0; fi
-            if [ $((DIFF % 300)) -lt 60 ] && [ $DIFF -gt 100 ]; then
-              rclone sync ~/Desktop/MyWorkspace gdrive:RDP_Backup || true
-            fi
+          echo "Session active. VNC desktop accessible for 6 hours."
+          echo "Press 'Cancel workflow' button to stop early."
+          
+          # 6 hours keep alive (GitHub Actions limit)
+          for i in {1..360}; do
+            echo "Minute $i/360 - Session active..."
             sleep 60
           done
