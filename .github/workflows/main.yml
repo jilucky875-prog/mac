@@ -1,70 +1,50 @@
-name: macOS VNC Desktop (Serveo Tunnel)
+name: macOS UI (VNC via Serveo)
 
-on: workflow_dispatch
+on:
+  workflow_dispatch:
 
 jobs:
   macos-vnc:
-    runs-on: macos-latest  # macos-26 bhi use kar sakte ho (latest)
-    
+    runs-on: macos-latest
+    timeout-minutes: 360
+
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Create VNC User & Enable VNC
+      - name: Enable VNC (Screen Sharing)
+        shell: bash
         run: |
-          # VNC user banao
-          sudo dscl . -create /Users/vncuser
-          sudo dscl . -create /Users/vncuser UserShell /bin/bash
-          sudo dscl . -create /Users/vncuser RealName "VNC User"
-          sudo dscl . -create /Users/vncuser UniqueID 501
-          sudo dscl . -create /Users/vncuser PrimaryGroupID 20
-          sudo dscl . -create /Users/vncuser NFSHomeDirectory /Users/vncuser
-          sudo dscl . -passwd /Users/vncuser "${{ secrets.VNC_USER_PASSWORD }}"
-          sudo createhomedir -c -u vncuser
-          
-          # VNC enable karo
+          set -euo pipefail
+
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
-            -activate -configure -access -on \
-            -clientopts -setvnclegacy -vnclegacy yes \
-            -clientopts -setvncpw -vncpw "${{ secrets.VNC_PASSWORD }}" \
-            -restart -agent -privs -all
-          
-          # Screen sharing enable
-          sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist || true
+            -activate -configure -access -on -privs -all -restart -agent
 
-      - name: Setup Serveo SSH Tunnel (VNC Port 5900)
-        run: |
-          # SSH key generate (serveo ke liye)
-          ssh-keygen -t rsa -f ~/.ssh/serveo_key -N ""
-          
-          # Serveo tunnel start (background me)
-          ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=60 \
-            -i ~/.ssh/serveo_key \
-            -R ${{ secrets.SERVEO_SUBDOMAIN }}:5900:localhost:5900 \
-            serveo.net > serveo.log 2>&1 &
-          
-          sleep 10
-          
-          # Tunnel URL print karo
-          echo "======================================"
-          echo "VNC ACCESS URL:"
-          cat serveo.log | grep -o 'Forwarding.*' || echo "Check full log below"
-          cat serveo.log
-          echo "======================================"
-          echo ""
-          echo "Connect using:"
-          echo "vnc://${{ secrets.SERVEO_SUBDOMAIN }}.serveo.net:5900"
-          echo "Username: vncuser"
-          echo "Password: (set in VNC_USER_PASSWORD secret)"
-          echo "======================================"
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
+            -configure -clientopts -setvnclegacy -vnclegacy yes
 
-      - name: Keep Alive (6 hours max)
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
+            -configure -clientopts -setvncpw -vncpw "${{ secrets.VNC_PASSWORD }}"
+
+          sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist 2>/dev/null || true
+
+          echo "VNC enabled on localhost:5900"
+
+      - name: Open Serveo tunnel to VNC (5900)
+        shell: bash
         run: |
-          echo "Session active. VNC desktop accessible for 6 hours."
-          echo "Press 'Cancel workflow' button to stop early."
-          
-          # 6 hours keep alive (GitHub Actions limit)
-          for i in {1..360}; do
-            echo "Minute $i/360 - Session active..."
-            sleep 60
-          done
+          set -euo pipefail
+
+          SUB="${{ secrets.SERVEO_SUBDOMAIN }}"
+          if [ -z "${SUB}" ]; then
+            echo "SERVEO_SUBDOMAIN empty => random subdomain will be assigned by serveo."
+            REMOTE="0:localhost:5900"
+          else
+            REMOTE="${SUB}:5900:localhost:5900"
+          fi
+
+          ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+            -R "${REMOTE}" serveo.net | tee serveo.log
+
+      - name: Notes
+        if: always()
+        run: |
+          echo "Check logs above for the Serveo forwarding line."
+          echo "Then connect via any VNC viewer to <subdomain>.serveo.net:5900"
