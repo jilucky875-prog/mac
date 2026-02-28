@@ -1,4 +1,4 @@
-name: macOS UI (VNC via Serveo)
+name: macOS UI (VNC via Serveo - Private TCP)
 
 on:
   workflow_dispatch:
@@ -27,24 +27,20 @@ jobs:
 
           echo "VNC enabled on localhost:5900"
 
-      - name: Open Serveo tunnel to VNC (5900)
+      - name: Open Serveo Private TCP tunnel (keeps job running)
         shell: bash
         run: |
           set -euo pipefail
 
-          SUB="${{ secrets.SERVEO_SUBDOMAIN }}"
-          if [ -z "${SUB}" ]; then
-            echo "SERVEO_SUBDOMAIN empty => random subdomain will be assigned by serveo."
-            REMOTE="0:localhost:5900"
-          else
-            REMOTE="${SUB}:5900:localhost:5900"
+          ALIAS="${{ secrets.SERVEO_ALIAS }}"
+          if [ -z "${ALIAS}" ]; then
+            ALIAS="macvnc"
           fi
 
-          ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
-            -R "${REMOTE}" serveo.net | tee serveo.log
-
-      - name: Notes
-        if: always()
-        run: |
-          echo "Check logs above for the Serveo forwarding line."
-          echo "Then connect via any VNC viewer to <subdomain>.serveo.net:5900"
+          echo "Use this ALIAS on your PC: ${ALIAS}"
+          echo "Next: run 'ssh -L 5902:${ALIAS}:5901 serveo.net' on your PC, then connect VNC to 127.0.0.1:5902"
+          
+          # Private TCP forwarding (NOT public random port)
+          ssh -o StrictHostKeyChecking=no \
+              -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+              -N -R "${ALIAS}:5901:localhost:5900" serveo.net
