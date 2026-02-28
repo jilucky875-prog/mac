@@ -1,7 +1,10 @@
-name: macOS UI (VNC via Serveo - Private TCP)
+name: macOS UI (VNC over Tailscale)
 
 on:
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   macos-vnc:
@@ -9,38 +12,52 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      - name: Enable VNC (Screen Sharing)
+      - name: Connect runner to Tailscale
+        uses: tailscale/github-action@v4
+        with:
+          authkey: ${{ secrets.TS_AUTHKEY }}
+          hostname: gha-macos-vnc
+          version: latest
+
+      - name: Create VNC user (system auth)
+        shell: bash
+        run: |
+          set -euo pipefail
+          U=vncuser
+
+          if ! id -u "$U" >/dev/null 2>&1; then
+            NEXT_UID="$(dscl . -list /Users UniqueID | awk '{print $2}' | sort -n | tail -1)"
+            NEXT_UID="$((NEXT_UID+1))"
+            sudo dscl . -create "/Users/$U"
+            sudo dscl . -create "/Users/$U" UserShell /bin/bash
+            sudo dscl . -create "/Users/$U" RealName "VNC User"
+            sudo dscl . -create "/Users/$U" UniqueID "$NEXT_UID"
+            sudo dscl . -create "/Users/$U" PrimaryGroupID 20
+            sudo dscl . -create "/Users/$U" NFSHomeDirectory "/Users/$U"
+            sudo dscl . -passwd "/Users/$U" "${{ secrets.VNC_USER_PASSWORD }}"
+            sudo createhomedir -c -u "$U" >/dev/null
+          fi
+
+          sudo dseditgroup -o edit -a "$U" -t user com.apple.access_screen_sharing || true
+
+      - name: Enable Screen Sharing / VNC
         shell: bash
         run: |
           set -euo pipefail
 
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
-            -activate -configure -access -on -privs -all -restart -agent
-
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
-            -configure -clientopts -setvnclegacy -vnclegacy yes
-
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
-            -configure -clientopts -setvncpw -vncpw "${{ secrets.VNC_PASSWORD }}"
+            -activate -configure -allowAccessFor -specifiedUsers -users vncuser \
+            -access -on -privs -all -restart -agent
 
           sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist 2>/dev/null || true
 
-          echo "VNC enabled on localhost:5900"
-
-      - name: Open Serveo Private TCP tunnel (keeps job running)
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          ALIAS="${{ secrets.SERVEO_ALIAS }}"
-          if [ -z "${ALIAS}" ]; then
-            ALIAS="macvnc"
-          fi
-
-          echo "Use this ALIAS on your PC: ${ALIAS}"
-          echo "Next: run 'ssh -L 5902:${ALIAS}:5901 serveo.net' on your PC, then connect VNC to 127.0.0.1:5902"
+          echo "Tailscale IPs:"
+          tailscale ip -4 || true
+          tailscale ip -6 || true
+          echo "Connect VNC to: <TAILSCALE_IPV4>:5900"
+          echo "Username: vncuser"
+          echo "Password: VNC_USER_PASSWORD secret"
+          echo "Stop: Cancel the workflow when done."
           
-          # Private TCP forwarding (NOT public random port)
-          ssh -o StrictHostKeyChecking=no \
-              -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
-              -N -R "${ALIAS}:5901:localhost:5900" serveo.net
+          # Keep alive
+          sleep 21600
